@@ -107,12 +107,32 @@
 <main id="view-settings" class="view" hidden>
   <section class="card">
     <h2>Réglages</h2>
-    <p class="muted small">Ces adresses sont enregistrées uniquement sur cet iPhone.</p>
+    <p class="muted small">Ces réglages sont enregistrés uniquement sur cet iPhone.</p>
     <label class="field"><span>Adresse pour recevoir les dossiers (Aide Chantier lit cette boîte)</span>
       <input id="set-email-reception" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="laurent.frison24@gmail.com"></label>
     <label class="field"><span>Adresse pour les réponses</span>
       <input id="set-email-reponse" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="contact@pyrenees-energies-solutions.fr"></label>
     <p class="muted small">Aide Chantier vous renverra l'analyse à cette adresse.</p>
+  </section>
+  <section class="card">
+    <h2>Envoi automatique (Aide Chantier)</h2>
+    <div class="setup-help">
+      <p><b>Configuration une seule fois</b></p>
+      <ol class="setup-steps">
+        <li>Sur GitHub, créez un jeton <i>fine-grained</i> avec <b>Contents: Read and write</b> uniquement sur le dépôt <code>visite-chantier-inbox</code>.</li>
+        <li>Collez le jeton ci-dessous. Il reste sur cet iPhone (jamais envoyé ailleurs).</li>
+        <li>Ensuite, « Envoyer à Aide Chantier » dépose le dossier sans feuille de partage.</li>
+      </ol>
+    </div>
+    <label class="field"><span>Jeton GitHub (envoi auto)</span>
+      <input id="set-github-pat" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="github_pat_…"></label>
+    <label class="field"><span>Dépôt inbox (owner/repo)</span>
+      <input id="set-github-repo" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="laurentfrison24-hub/visite-chantier-inbox"></label>
+    <label class="field"><span>URL webhook <i>(facultatif)</i></span>
+      <input id="set-webhook-url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://…/webhook"></label>
+    <label class="field"><span>Clé webhook <i>(facultatif)</i></span>
+      <input id="set-webhook-key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="clé secrète"></label>
+    <p class="muted small">Sans webhook, Aide Chantier peut quand même récupérer le dossier via le dépôt (routines 12:14 / 18:14) ou Gmail.</p>
     <button type="button" class="btn primary" id="btn-settings-save" style="width:100%;margin-top:8px">Enregistrer</button>
   </section>
   <p class="footer-note muted">Version <span id="settings-version"></span></p>

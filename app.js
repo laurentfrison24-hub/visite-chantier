@@ -2,7 +2,7 @@
    Application web autonome (PWA), sans serveur. Données dans IndexedDB. */
 'use strict';
 (function () {
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const COMPANY = 'Pyrénées Énergies Solutions';
 const MAX_SIDE = 2000;          // côté long max des photos (stockage)
 const JPEG_Q = 0.85;
@@ -11,7 +11,9 @@ const EXPORT_WARN_BYTES = 20 * 1024 * 1024;   // ~20 Mo : recompression
 const EXPORT_HARD_BYTES = 24 * 1024 * 1024;   // avertissement Gmail
 const DEFAULT_EMAIL_RECEPTION = 'laurent.frison24@gmail.com';
 const DEFAULT_EMAIL_REPONSE = 'contact@pyrenees-energies-solutions.fr';
+const DEFAULT_GITHUB_REPO = 'laurentfrison24-hub/visite-chantier-inbox';
 const SETTINGS_KEY = 'visite-chantier-settings';
+const GH_API = 'https://api.github.com';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -46,16 +48,34 @@ function loadSettings() {
     return {
       emailReception: (o.emailReception || DEFAULT_EMAIL_RECEPTION).trim() || DEFAULT_EMAIL_RECEPTION,
       emailReponse: (o.emailReponse || DEFAULT_EMAIL_REPONSE).trim() || DEFAULT_EMAIL_REPONSE,
+      githubPat: (o.githubPat || '').trim(),
+      githubRepo: (o.githubRepo || DEFAULT_GITHUB_REPO).trim() || DEFAULT_GITHUB_REPO,
+      webhookUrl: (o.webhookUrl || '').trim(),
+      webhookKey: (o.webhookKey || '').trim(),
     };
   } catch (e) {
-    return { emailReception: DEFAULT_EMAIL_RECEPTION, emailReponse: DEFAULT_EMAIL_REPONSE };
+    return {
+      emailReception: DEFAULT_EMAIL_RECEPTION, emailReponse: DEFAULT_EMAIL_REPONSE,
+      githubPat: '', githubRepo: DEFAULT_GITHUB_REPO, webhookUrl: '', webhookKey: '',
+    };
   }
 }
 function saveSettings(o) {
+  const prev = loadSettings();
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     emailReception: (o.emailReception || DEFAULT_EMAIL_RECEPTION).trim() || DEFAULT_EMAIL_RECEPTION,
     emailReponse: (o.emailReponse || DEFAULT_EMAIL_REPONSE).trim() || DEFAULT_EMAIL_REPONSE,
+    githubPat: o.githubPat != null ? String(o.githubPat).trim() : (prev.githubPat || ''),
+    githubRepo: (o.githubRepo || DEFAULT_GITHUB_REPO).trim() || DEFAULT_GITHUB_REPO,
+    webhookUrl: o.webhookUrl != null ? String(o.webhookUrl).trim() : (prev.webhookUrl || ''),
+    webhookKey: o.webhookKey != null ? String(o.webhookKey).trim() : (prev.webhookKey || ''),
   }));
+}
+function hasGithubPat() { return !!(loadSettings().githubPat); }
+function parseRepo(s) {
+  const m = String(s || '').trim().match(/^([\w.-]+)\/([\w.-]+)$/);
+  if (!m) throw new Error('Dépôt invalide (attendu : owner/repo)');
+  return { owner: m[1], repo: m[2] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1035,6 +1055,188 @@ async function buildZipForMail(chantierId) {
   res.warned = warned;
   return res;
 }
+/* ------------------------------------------------------------------ */
+/* Envoi GitHub (inbox privé) + ping webhook                           */
+/* ------------------------------------------------------------------ */
+async function blobToBase64(blob) {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+function ghHeaders(pat) {
+  return {
+    'Authorization': 'Bearer ' + pat,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'Content-Type': 'application/json',
+  };
+}
+async function ghFetch(path, { pat, method = 'GET', body } = {}) {
+  const res = await fetch(GH_API + path, {
+    method,
+    headers: ghHeaders(pat),
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = { message: text }; }
+  if (!res.ok) {
+    const msg = (data && data.message) || ('HTTP ' + res.status);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('Jeton GitHub refusé (' + res.status + '). Vérifiez le PAT et les droits Contents sur visite-chantier-inbox. Détail : ' + msg);
+    }
+    throw new Error('GitHub : ' + msg);
+  }
+  return data;
+}
+async function ghCreateBlob(owner, repo, pat, contentB64) {
+  const data = await ghFetch(`/repos/${owner}/${repo}/git/blobs`, {
+    pat, method: 'POST', body: { content: contentB64, encoding: 'base64' },
+  });
+  return data.sha;
+}
+async function ghCreateBlobUtf8(owner, repo, pat, text) {
+  // UTF-8 text as base64 to avoid JSON escaping issues for large JSON
+  const b64 = btoa(unescape(encodeURIComponent(text)));
+  return ghCreateBlob(owner, repo, pat, b64);
+}
+function inboxFolderPath(c) {
+  const day = (c.date || '').slice(0, 10) || localISO().slice(0, 10);
+  const now = new Date();
+  const hhmmss = pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+  const slugNom = slug(c.nom || c.client || 'chantier', 40) || 'chantier';
+  return `dossiers/${day}/${slugNom}_${hhmmss}`;
+}
+/**
+ * Dépose chantier.json + dossier.zip dans le dépôt inbox via Git Data API
+ * (blobs → tree → commit → update ref). Fiable jusqu'à ~20–50 Mo.
+ */
+async function uploadDossierToGithub(res, settings) {
+  const { owner, repo } = parseRepo(settings.githubRepo);
+  const pat = settings.githubPat;
+  if (!pat) throw new Error('Jeton GitHub manquant');
+  const folder = inboxFolderPath(res.chantier);
+  busy(true, 'Lecture du dépôt…');
+  let baseCommitSha = null, baseTreeSha = null;
+  try {
+    const ref = await ghFetch(`/repos/${owner}/${repo}/git/ref/heads/main`, { pat });
+    baseCommitSha = ref.object && ref.object.sha;
+    const commit = await ghFetch(`/repos/${owner}/${repo}/git/commits/${baseCommitSha}`, { pat });
+    baseTreeSha = commit.tree && commit.tree.sha;
+  } catch (e) {
+    // dépôt sans branche main : premier commit sans parent
+    baseCommitSha = null;
+    baseTreeSha = null;
+  }
+  busy(true, 'Envoi du JSON…');
+  // Extraire chantier.json depuis le ZIP pour un accès rapide
+  let chantierJsonText = null;
+  try {
+    const z = await JSZip.loadAsync(res.blob);
+    const f = z.file('chantier.json');
+    if (f) chantierJsonText = await f.async('string');
+  } catch (e) { /* ignore */ }
+  if (!chantierJsonText) {
+    chantierJsonText = JSON.stringify({
+      application: 'Visite Chantier – ' + COMPANY, version: APP_VERSION,
+      exporte_le: new Date().toISOString(),
+      email_reponse: settings.emailReponse, email_reception: settings.emailReception,
+      chantier: { id: res.chantier.id, nom: res.chantier.nom, client: res.chantier.client },
+      note: 'chantier.json regeneré (ZIP illisible côté client)',
+    }, null, 2);
+  }
+  const jsonSha = await ghCreateBlobUtf8(owner, repo, pat, chantierJsonText);
+  busy(true, 'Envoi du ZIP (' + fmtSize(res.blob.size) + ')…');
+  const zipB64 = await blobToBase64(res.blob);
+  const zipSha = await ghCreateBlob(owner, repo, pat, zipB64);
+  busy(true, 'Création du commit…');
+  const tree = await ghFetch(`/repos/${owner}/${repo}/git/trees`, {
+    pat, method: 'POST',
+    body: {
+      base_tree: baseTreeSha || undefined,
+      tree: [
+        { path: folder + '/chantier.json', mode: '100644', type: 'blob', sha: jsonSha },
+        { path: folder + '/dossier.zip', mode: '100644', type: 'blob', sha: zipSha },
+      ],
+    },
+  });
+  const nom = res.chantier.nom || res.chantier.client || 'chantier';
+  const commitBody = {
+    message: `Dossier Visite Chantier : ${nom}\n\nChemin : ${folder}/`,
+    tree: tree.sha,
+    parents: baseCommitSha ? [baseCommitSha] : [],
+  };
+  const newCommit = await ghFetch(`/repos/${owner}/${repo}/git/commits`, {
+    pat, method: 'POST', body: commitBody,
+  });
+  if (baseCommitSha) {
+    await ghFetch(`/repos/${owner}/${repo}/git/refs/heads/main`, {
+      pat, method: 'PATCH', body: { sha: newCommit.sha, force: false },
+    });
+  } else {
+    await ghFetch(`/repos/${owner}/${repo}/git/refs`, {
+      pat, method: 'POST', body: { ref: 'refs/heads/main', sha: newCommit.sha },
+    });
+  }
+  return { folder, owner, repo, commitSha: newCommit.sha, path: folder + '/' };
+}
+async function pingWebhook(settings, meta) {
+  const url = (settings.webhookUrl || '').trim();
+  if (!url) return { skipped: true };
+  const payload = {
+    event: 'dossier_visite',
+    source: 'visite-chantier',
+    version: APP_VERSION,
+    repo: settings.githubRepo,
+    path: meta.path,
+    folder: meta.folder,
+    commit: meta.commitSha,
+    chantier: {
+      id: meta.chantierId,
+      nom: meta.nom,
+      client: meta.client,
+      date: meta.date,
+    },
+    zip_name: meta.zipName,
+    zip_bytes: meta.zipBytes,
+    photos: meta.photoCount,
+    at: new Date().toISOString(),
+  };
+  if (settings.webhookKey) payload.cle = settings.webhookKey;
+  const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+  if (settings.webhookKey) headers['X-Webhook-Key'] = settings.webhookKey;
+  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error('Webhook HTTP ' + res.status + (t ? ' : ' + t.slice(0, 120) : ''));
+  }
+  return { ok: true, status: res.status };
+}
+async function showPatSetupScreen() {
+  const choice = await modal({
+    title: 'Configuration requise',
+    html: `<div class="setup-help">
+      <p><b>Pour envoyer sans feuille de partage</b></p>
+      <ol class="setup-steps">
+        <li>Ouvrez <b>Réglages ⚙️</b>.</li>
+        <li>Créez un jeton GitHub <i>fine-grained</i> avec <b>Contents: Read and write</b> uniquement sur <code>visite-chantier-inbox</code>.</li>
+        <li>Collez-le dans « Jeton GitHub (envoi auto) » puis Enregistrer.</li>
+      </ol>
+      <p class="muted small" style="margin-top:8px">Sans jeton, vous pouvez encore utiliser « Partager autrement » (feuille de partage iOS).</p>
+    </div>`,
+    buttons: [
+      { label: 'Plus tard', value: null },
+      { label: 'Ouvrir les réglages', value: 'settings', cls: 'primary' },
+    ],
+  });
+  if (choice === 'settings') location.hash = '#/settings';
+}
+
 function canShareFile(file) {
   try { return !!(navigator.share && navigator.canShare && navigator.canShare({ files: [file] })); } catch (e) { return false; }
 }
@@ -1093,46 +1295,65 @@ function setExportBusy(on) {
 }
 async function doSendAide() {
   if (!current) return;
+  const settings = loadSettings();
+  if (!settings.githubPat) {
+    await showPatSetupScreen();
+    return;
+  }
   setExportBusy(true);
   const res = await prepareExport();
-  setExportBusy(false);
-  if (!res) return;
-  const file = new File([res.blob], res.name, { type: 'application/zip' });
-  const shareable = canShareFile(file);
-  const to = loadSettings().emailReception;
-  const sizeNote = res.oversized
-    ? `<p style="color:var(--red)">⚠ Le dossier fait ${fmtSize(res.blob.size)} (limite Gmail ~25 Mo). Retirez des photos ou réduisez-les avant d'envoyer.</p>`
-    : (res.warned ? `<p class="muted small">Photos recompressées pour rester sous 20 Mo (${fmtSize(res.blob.size)}).</p>` : '');
-  if (shareable && !res.oversized) {
-    try {
-      await shareDossier(file, res.chantier, res.photoCount, { aide: true });
-      await markSent(current.id);
-      toast('Dossier envoyé à Aide Chantier');
-      return;
-    } catch (e) {
-      if (e && e.name === 'AbortError') return;
-      // geste expiré → fenêtre de secours
-    }
+  if (!res) { setExportBusy(false); return; }
+  if (res.oversized) {
+    setExportBusy(false);
+    await modal({
+      title: 'Dossier trop volumineux',
+      html: `<p style="color:var(--red)">⚠ Le dossier fait ${fmtSize(res.blob.size)} (limite pratique ~24 Mo). Retirez des photos ou réduisez-les avant d'envoyer.</p>`,
+      buttons: [{ label: 'OK', value: null, cls: 'primary' }],
+    });
+    return;
   }
-  const choice = await modal({
-    title: 'Envoyer à Aide Chantier',
-    html: `<p><b>${esc(res.name)}</b><br><span class="muted">${fmtSize(res.blob.size)}</span></p>
-           ${sizeNote}
-           <div class="share-hint">Choisissez <b>Mail</b>, destinataire : <b>${esc(to)}</b> (adresse copiée, collez-la). Objet prérempli : « ${esc(shareTitle(res.chantier))} ».</div>
-           <p class="muted small">${shareable ? 'Touchez « Partager » pour ouvrir la feuille de partage iOS.' : 'Le partage direct n\'est pas disponible : téléchargez le ZIP puis joignez-le à un e-mail.'}</p>`,
-    buttons: [
-      { label: 'Fermer', value: null },
-      { label: 'Télécharger', value: 'dl', cls: 'ghost' },
-      ...(shareable ? [{ label: 'Partager…', value: 'share', cls: 'primary', onClick: () => {
-        shareDossier(file, res.chantier, res.photoCount, { aide: true }).then(async () => {
-          await markSent(current.id); toast('Dossier envoyé à Aide Chantier');
-        }).catch(e => {
-          if (!e || e.name !== 'AbortError') { toast('Partage impossible : téléchargement'); download(res.blob, res.name); }
-        });
-      } }] : []),
-    ],
-  });
-  if (choice === 'dl') download(res.blob, res.name);
+  try {
+    busy(true, 'Envoi vers Aide Chantier…');
+    const meta = await uploadDossierToGithub(res, settings);
+    let webhookNote = '';
+    try {
+      busy(true, 'Notification webhook…');
+      const wh = await pingWebhook(settings, {
+        path: meta.path, folder: meta.folder, commitSha: meta.commitSha,
+        chantierId: res.chantier.id, nom: res.chantier.nom, client: res.chantier.client,
+        date: res.chantier.date, zipName: res.name, zipBytes: res.blob.size, photoCount: res.photoCount,
+      });
+      if (wh.skipped) webhookNote = ' (sans webhook — dépôt seul)';
+    } catch (we) {
+      // Upload OK : on marque envoyé même si le ping échoue
+      webhookNote = ' (webhook en échec : ' + (we && we.message ? we.message : we) + ')';
+      console.warn('webhook', we);
+    }
+    await markSent(current.id);
+    busy(false);
+    setExportBusy(false);
+    toast('Dossier envoyé — Aide Chantier va le traiter', 4500);
+    await modal({
+      title: 'Dossier envoyé',
+      html: `<div class="success-banner">Dossier envoyé — Aide Chantier va le traiter</div>
+             <p class="muted small">Chemin : <code>${esc(meta.path)}</code>${esc(webhookNote)}</p>
+             ${res.warned ? `<p class="muted small">Photos recompressées (${fmtSize(res.blob.size)}).</p>` : ''}`,
+      buttons: [{ label: 'OK', value: null, cls: 'primary' }],
+    });
+  } catch (e) {
+    busy(false);
+    setExportBusy(false);
+    const msg = e && e.message ? e.message : String(e);
+    await modal({
+      title: 'Envoi impossible',
+      html: `<p style="color:var(--red)">${esc(msg)}</p>
+             <p class="muted small">Vérifiez le jeton dans Réglages, ou utilisez « Partager autrement ».</p>`,
+      buttons: [
+        { label: 'Réglages', value: 'settings', cls: 'ghost' },
+        { label: 'OK', value: null, cls: 'primary' },
+      ],
+    }).then(v => { if (v === 'settings') location.hash = '#/settings'; });
+  }
 }
 async function doShareOther() {
   if (!current) return;
@@ -1185,6 +1406,10 @@ function showSettings() {
   const s = loadSettings();
   $('#set-email-reception').value = s.emailReception;
   $('#set-email-reponse').value = s.emailReponse;
+  $('#set-github-pat').value = s.githubPat;
+  $('#set-github-repo').value = s.githubRepo || DEFAULT_GITHUB_REPO;
+  $('#set-webhook-url').value = s.webhookUrl || '';
+  $('#set-webhook-key').value = s.webhookKey || '';
   $('#settings-version').textContent = APP_VERSION;
   window.scrollTo(0, 0);
 }
@@ -1192,10 +1417,16 @@ $('#btn-settings').addEventListener('click', () => { location.hash = '#/settings
 $('#btn-settings-save').addEventListener('click', () => {
   const emailReception = $('#set-email-reception').value.trim();
   const emailReponse = $('#set-email-reponse').value.trim();
+  const githubPat = $('#set-github-pat').value.trim();
+  const githubRepo = $('#set-github-repo').value.trim() || DEFAULT_GITHUB_REPO;
+  const webhookUrl = $('#set-webhook-url').value.trim();
+  const webhookKey = $('#set-webhook-key').value.trim();
   if (emailReception && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailReception)) { toast('Adresse de réception invalide'); return; }
   if (emailReponse && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailReponse)) { toast('Adresse de réponse invalide'); return; }
-  saveSettings({ emailReception, emailReponse });
-  toast('Réglages enregistrés');
+  try { parseRepo(githubRepo); } catch (e) { toast(e.message); return; }
+  if (webhookUrl && !/^https?:\/\//i.test(webhookUrl)) { toast('URL webhook invalide (http/https)'); return; }
+  saveSettings({ emailReception, emailReponse, githubPat, githubRepo, webhookUrl, webhookKey });
+  toast(githubPat ? 'Réglages enregistrés — envoi auto prêt' : 'Réglages enregistrés');
   go('#/');
 });
 
@@ -1206,6 +1437,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e)); });
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-window.__app = { DB, version: APP_VERSION, loadSettings, saveSettings, shareTitle, zipFileName, buildZipForMail };
+window.__app = { DB, version: APP_VERSION, loadSettings, saveSettings, shareTitle, zipFileName, buildZipForMail, uploadDossierToGithub, hasGithubPat, pingWebhook };
 route().catch(err);
 })();
