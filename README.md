@@ -14,6 +14,12 @@ Tests : `cd test && npm i && node e2e.js` (serveur local lancé).
 
 Mise à jour : modifier les fichiers, puis incrémenter `CACHE` dans `app/sw.js` pour que les iPhones récupèrent la nouvelle version.
 
+## v1.2.2 – Contraste logo sur bandeau bleu
+
+- Pastille blanche plus large derrière le logo (~52px, padding 8–10px, ombre légère) pour mieux détacher le logo PES du bandeau bleu.
+- Pas de teinte bleue sur le logo ; bandeau bleu conservé.
+- CACHE `visite-chantier-v1.2.2`.
+
 ## v1.2.1 – Logo PES dans l'en-tête
 
 - Logo Pyrénées Énergies Solutions dans le header (`icons/logo-header.png`, fond blanc arrondi sur le bandeau bleu).
