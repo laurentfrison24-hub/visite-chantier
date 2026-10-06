@@ -1,7 +1,7 @@
 # Visite Chantier – Pyrénées Énergies Solutions
 
 PWA (application web installable) pour les visites de chantier : fiche chantier, adresse GPS,
-notes (dictée iOS), photos annotées, export ZIP partagé via la feuille de partage iOS.
+notes (dictée iOS), photos annotées, envoi du dossier à Aide Chantier.
 
 - `app/` : le site statique à publier tel quel (HTML/CSS/JS, aucune dépendance serveur).
   - `index.html`, `styles.css`, `app.js`, `sw.js` (hors ligne), `manifest.json`, `icons/`, `vendor/jszip.min.js`
@@ -14,10 +14,17 @@ Tests : `cd test && npm i && node e2e.js` (serveur local lancé).
 
 Mise à jour : modifier les fichiers, puis incrémenter `CACHE` dans `app/sw.js` pour que les iPhones récupèrent la nouvelle version.
 
+## v1.2.0 – Envoi auto via dépôt GitHub (sans feuille de partage)
+
+- Bouton principal **Envoyer à Aide Chantier** : si un jeton GitHub est configuré, construit le ZIP et le pousse dans le dépôt privé `laurentfrison24-hub/visite-chantier-inbox` (`dossiers/<date>/<slug>_<HHmmss>/chantier.json` + `dossier.zip`) via l’API Git (blobs/trees/commits), puis ping webhook optionnel.
+- **Réglages** : champ « Jeton GitHub (envoi auto) » (stocké en localStorage), dépôt editable, URL + clé webhook.
+- Sans jeton : écran de configuration (pas de share sheet). **Partager autrement** reste le repli iOS.
+- CACHE `visite-chantier-v1.2.0`.
+
 ## v1.1.0 – Envoi à Aide Chantier
 
-- Bouton principal **Envoyer à Aide Chantier** (feuille de partage iOS → Mail, objet prérempli, adresse de réception copiée).
+- Bouton principal **Envoyer à Aide Chantier** (feuille de partage iOS → Mail).
 - **Partager autrement** pour un partage générique / téléchargement.
-- Réglages (⚙️) : adresse de réception des dossiers (défaut `laurent.frison24@gmail.com`) et adresse pour les réponses d'analyse (défaut `contact@pyrenees-energies-solutions.fr`, stockée dans `chantier.json` comme `email_reponse`).
+- Réglages (⚙️) : adresses de réception et de réponse.
 - ZIP nommé `visite-chantier_<slug>_<AAAA-MM-JJ>.zip`, recompression si > ~20 Mo.
-- Badge **Envoyé le …** après un partage réussi.
+- Badge **Envoyé le …** après un envoi réussi.

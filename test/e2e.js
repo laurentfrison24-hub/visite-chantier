@@ -172,20 +172,31 @@ const check = (name, ok, extra = '') => { results.push({ name, ok: !!ok, extra }
   const defP = await page.inputValue('#set-email-reponse');
   check('Réglages : réception par défaut', defR === 'laurent.frison24@gmail.com', defR);
   check('Réglages : réponse par défaut', defP === 'contact@pyrenees-energies-solutions.fr', defP);
+  check('Réglages : dépôt inbox par défaut', (await page.inputValue('#set-github-repo')) === 'laurentfrison24-hub/visite-chantier-inbox');
+  check('Réglages : champ jeton GitHub présent', await page.isVisible('#set-github-pat'));
+  check('Réglages : aide PAT visible', /fine-grained|Contents/i.test(await page.textContent('.setup-help')));
   await page.fill('#set-email-reponse', 'reponses@pyrenees-energies-solutions.fr');
+  await hideToast(page);
+  await page.screenshot({ path: path.join(SHOTS, '05-reglages.png'), fullPage: true });
+  // Enregistrer sans PAT d'abord
   await page.click('#btn-settings-save');
   await page.waitForSelector('#view-home:not([hidden])');
-  // rouvrir la visite Dupont (la 1re créée, unique pour l'instant)
   await page.click('.item .item-main');
   await page.waitForSelector('#view-chantier:not([hidden])');
 
-  // --- Export ZIP (repli téléchargement, sans Web Share) ---
+  // Sans PAT → écran de configuration (pas de share sheet)
   await page.click('#btn-send-aide');
+  await page.waitForSelector('#modal:not([hidden])', { timeout: 10000 });
+  check('Sans PAT : modal configuration', /Configuration requise|jeton GitHub/i.test(await page.textContent('#modal-title') + await page.textContent('#modal-body')));
+  await page.click('#modal-actions .btn:has-text("Plus tard")');
+  await page.waitForSelector('#modal', { state: 'hidden' });
+
+  // --- Partager autrement : ZIP (repli téléchargement) ---
+  await page.click('#btn-share-other');
   await page.waitForSelector('#modal:not([hidden])', { timeout: 30000 });
   await page.screenshot({ path: path.join(SHOTS, '04-dossier-pret.png') });
   const modalTitle = await page.textContent('#modal-title');
-  check('Modal « Envoyer à Aide Chantier »', /Aide Chantier/.test(modalTitle), modalTitle);
-  check('Hint destinataire Mail dans la modal', /laurent\.frison24@gmail\.com/.test(await page.textContent('#modal-body')));
+  check('Modal « Partager autrement »', /Partager autrement/.test(modalTitle), modalTitle);
   const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#modal-actions .btn:has-text("Télécharger")')]);
   const zipPath = path.join(__dirname, 'export-test.zip');
   await dl.saveAs(zipPath);
@@ -212,7 +223,70 @@ const check = (name, ok, extra = '') => { results.push({ name, ok: !!ok, extra }
   fs.writeFileSync(path.join(__dirname, 'zip-out', 'chantier.json'), JSON.stringify(data, null, 2));
   await page.click('#modal-actions .btn:has-text("Fermer")').catch(() => {});
 
-  // Web Share : simule Safari iOS (partage fichiers + presse-papiers)
+  // Configurer un faux PAT + mock GitHub API + webhook
+  await page.click('#btn-back');
+  await page.waitForSelector('#view-home:not([hidden])');
+  await page.click('#btn-settings');
+  await page.waitForSelector('#view-settings:not([hidden])');
+  await page.fill('#set-github-pat', 'github_pat_TEST_FAKE_TOKEN_NOT_REAL');
+  await page.fill('#set-webhook-url', 'https://example.test/webhook-visite');
+  await page.fill('#set-webhook-key', 'cle-test');
+  await page.click('#btn-settings-save');
+  await page.waitForSelector('#view-home:not([hidden])');
+  await page.click('.item .item-main');
+  await page.waitForSelector('#view-chantier:not([hidden])');
+
+  await page.evaluate(() => {
+    window.__ghCalls = [];
+    window.__webhookCalls = [];
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = (init.method || 'GET').toUpperCase();
+      const body = init.body ? String(init.body) : '';
+      if (url.includes('api.github.com')) {
+        window.__ghCalls.push({ url, method, body: body.slice(0, 200), auth: (init.headers && (init.headers.Authorization || init.headers.authorization)) || '' });
+        const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+        if (method === 'GET' && /\/git\/ref\/heads\/main/.test(url)) return json({ object: { sha: 'aaa111basecommit' } });
+        if (method === 'GET' && /\/git\/commits\//.test(url)) return json({ tree: { sha: 'bbb222basetree' }, sha: 'aaa111basecommit' });
+        if (method === 'POST' && /\/git\/blobs/.test(url)) {
+          const n = window.__ghCalls.filter(c => /\/git\/blobs/.test(c.url) && c.method === 'POST').length;
+          return json({ sha: 'blobsha' + n, url: 'https://api.github.com/blob' });
+        }
+        if (method === 'POST' && /\/git\/trees/.test(url)) return json({ sha: 'treesha999' });
+        if (method === 'POST' && /\/git\/commits/.test(url)) return json({ sha: 'commitsha777' });
+        if (method === 'PATCH' && /\/git\/refs\/heads\/main/.test(url)) return json({ object: { sha: 'commitsha777' } });
+        return json({ message: 'unexpected github call: ' + method + ' ' + url }, 500);
+      }
+      if (url.includes('example.test/webhook-visite')) {
+        window.__webhookCalls.push({ url, method, body });
+        return new Response('{"ok":true}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return realFetch(input, init);
+    };
+  });
+
+  await page.click('#btn-send-aide');
+  await page.waitForSelector('#modal:not([hidden])', { timeout: 60000 });
+  const successTitle = await page.textContent('#modal-title');
+  const successBody = await page.textContent('#modal-body');
+  check('Envoi GitHub : modal succès', /Dossier envoyé/.test(successTitle) && /Aide Chantier va le traiter/.test(successBody), successTitle + ' | ' + successBody.slice(0, 120));
+  await hideToast(page);
+  await page.screenshot({ path: path.join(SHOTS, '06-envoi-succes.png') });
+  const gh = await page.evaluate(() => window.__ghCalls);
+  const wh = await page.evaluate(() => window.__webhookCalls);
+  check('GitHub : blobs + tree + commit + ref', gh.filter(c => /\/git\/blobs/.test(c.url)).length >= 2
+    && gh.some(c => /\/git\/trees/.test(c.url) && c.method === 'POST')
+    && gh.some(c => /\/git\/commits/.test(c.url) && c.method === 'POST')
+    && gh.some(c => /\/git\/refs\/heads\/main/.test(c.url) && c.method === 'PATCH'), JSON.stringify(gh.map(c => c.method + ' ' + c.url.replace('https://api.github.com', ''))));
+  check('GitHub : Authorization Bearer (faux PAT)', gh.every(c => /Bearer github_pat_TEST_FAKE/.test(c.auth)));
+  check('Webhook ping envoyé', wh.length === 1 && /dossier_visite/.test(wh[0].body) && /cle-test/.test(wh[0].body), wh[0] && wh[0].body.slice(0, 200));
+  await page.click('#modal-actions .btn:has-text("OK")');
+  await page.waitForSelector('#modal', { state: 'hidden' });
+  const sentBanner = await page.isVisible('#sent-banner:not([hidden])');
+  check('Marqué « Envoyé » après upload GitHub', sentBanner, await page.textContent('#sent-banner').catch(() => ''));
+
+  // Partager autrement : Web Share (fallback)
   await page.evaluate(() => {
     window.__shared = null;
     window.__copied = null;
@@ -224,18 +298,14 @@ const check = (name, ok, extra = '') => { results.push({ name, ok: !!ok, extra }
     try { Object.defineProperty(navigator, 'clipboard', { configurable: true, get: () => clip }); }
     catch (e) { navigator.clipboard = clip; }
   });
-  await page.click('#btn-send-aide');
+  await page.click('#btn-share-other');
   await page.waitForFunction(() => window.__shared, null, { timeout: 30000 });
   const shared = await page.evaluate(() => ({ ...window.__shared, copied: window.__copied }));
-  check('navigator.share({files,title,text})', shared.n === 1 && shared.type === 'application/zip'
+  check('Partager autrement : navigator.share({files})', shared.n === 1 && shared.type === 'application/zip'
     && /^visite-chantier_/.test(shared.name)
     && /Visite Chantier/.test(shared.title)
-    && /Dupont/.test(shared.title)
-    && /Perpignan|photo/i.test(shared.text), JSON.stringify(shared).slice(0, 280));
-  check('Adresse réception copiée dans le presse-papiers', shared.copied === 'laurent.frison24@gmail.com', shared.copied);
-  await page.waitForTimeout(500);
-  const sentBanner = await page.isVisible('#sent-banner:not([hidden])');
-  check('Marqué « Envoyé » après partage réussi', sentBanner, await page.textContent('#sent-banner').catch(() => ''));
+    && /Dupont/.test(shared.title), JSON.stringify(shared).slice(0, 280));
+
   await page.click('#btn-back');
   await page.waitForSelector('#view-home:not([hidden])');
   check('Liste : badge Envoyé le …', /Envoyé le/.test(await page.textContent('.item:first-child')), await page.textContent('.item:first-child .item-sent').catch(() => ''));
