@@ -2,7 +2,7 @@
    Application web autonome (PWA), sans serveur. Données dans IndexedDB. */
 'use strict';
 (function () {
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const COMPANY = 'Pyrénées Énergies Solutions';
 const MAX_SIDE = 2000;          // côté long max des photos (stockage)
 const JPEG_Q = 0.85;
@@ -383,7 +383,7 @@ async function showHome() {
   document.body.classList.remove('in-chantier', 'in-settings');
   $('#view-chantier').hidden = true; $('#view-settings').hidden = true; $('#view-home').hidden = false;
   $('#btn-back').hidden = true; $('#btn-settings').hidden = false;
-  $('#topbar-sub').textContent = 'Visites de chantier';
+  $('#topbar-sub').textContent = 'Pyrénées Énergies Solutions';
   document.title = 'Visite Chantier – ' + COMPANY;
   const list = await DB.allChantiers();
   const key = (c) => (c.date || '') + '|' + (c.createdAt || '');

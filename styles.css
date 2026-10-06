@@ -22,13 +22,20 @@ button{font:inherit;color:inherit}
   background:linear-gradient(180deg,var(--blue),var(--blue-d));color:#fff;
   padding:calc(var(--sat) + 10px) calc(var(--sar) + 14px) 10px calc(var(--sal) + 14px);min-height:60px;
   box-shadow:0 2px 8px rgba(0,0,0,.18)}
-.brand{flex:1;min-width:0;text-align:center}
+.brand{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:10px;text-align:left}
+.brand-logo{flex:none;width:44px;height:50px;object-fit:contain;background:#fff;border-radius:10px;padding:3px;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.brand-text{min-width:0;flex:0 1 auto}
 .brand-name{font-weight:700;font-size:17px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.brand-sub{font-size:13px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-sub{font-size:12px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .back{position:absolute;left:calc(var(--sal) + 4px);bottom:8px;background:none;border:0;color:#fff;font-size:17px;padding:10px 10px;min-height:44px}
 .settings-btn{position:absolute;right:calc(var(--sar) + 4px);bottom:8px;background:none;border:0;color:#fff;font-size:22px;padding:8px 12px;min-height:44px;min-width:44px;line-height:1}
-body.in-chantier .brand,body.in-settings .brand{padding-left:84px;padding-right:56px;text-align:left}
+body.in-chantier .brand,body.in-settings .brand{padding-left:84px;padding-right:56px;justify-content:flex-start}
 body:not(.in-chantier):not(.in-settings) .brand{padding-right:56px}
+@media (max-width:360px){
+  .brand-logo{width:38px;height:43px;padding:2px;border-radius:8px}
+  .brand-name{font-size:15px}
+  .brand-sub{font-size:11px}
+}
 
 .view{padding:12px calc(var(--sar) + 12px) calc(var(--bar-h) + var(--sab) + 20px) calc(var(--sal) + 12px);max-width:720px;margin:0 auto}
 
