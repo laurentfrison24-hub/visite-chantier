@@ -4,7 +4,7 @@
   --red:#d32f2f; --green:#2e7d32;
   --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
   --sal:env(safe-area-inset-left,0px); --sar:env(safe-area-inset-right,0px);
-  --bar-h:76px;
+  --bar-h:120px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
@@ -26,7 +26,9 @@ button{font:inherit;color:inherit}
 .brand-name{font-weight:700;font-size:17px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .brand-sub{font-size:13px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .back{position:absolute;left:calc(var(--sal) + 4px);bottom:8px;background:none;border:0;color:#fff;font-size:17px;padding:10px 10px;min-height:44px}
-body.in-chantier .brand{padding-left:84px;padding-right:20px;text-align:left}
+.settings-btn{position:absolute;right:calc(var(--sar) + 4px);bottom:8px;background:none;border:0;color:#fff;font-size:22px;padding:8px 12px;min-height:44px;min-width:44px;line-height:1}
+body.in-chantier .brand,body.in-settings .brand{padding-left:84px;padding-right:56px;text-align:left}
+body:not(.in-chantier):not(.in-settings) .brand{padding-right:56px}
 
 .view{padding:12px calc(var(--sar) + 12px) calc(var(--bar-h) + var(--sab) + 20px) calc(var(--sal) + 12px);max-width:720px;margin:0 auto}
 
@@ -139,3 +141,11 @@ input:focus,textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 
 @keyframes spin{to{transform:rotate(360deg)}}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--sab) + 92px);z-index:130;background:#263238;color:#fff;
   padding:12px 18px;border-radius:12px;font-size:15px;max-width:90vw;box-shadow:0 4px 16px rgba(0,0,0,.25);text-align:center}
+
+.bottombar-stack{flex-direction:column;gap:6px;align-items:stretch}
+.bottombar-row{display:flex;align-items:center;gap:10px}
+.bottombar-stack .btn.big{flex:1}
+.bottombar-stack .btn.ghost{min-height:40px;font-size:15px;font-weight:500;color:var(--blue-d)}
+.item-sent{color:var(--green);font-weight:600}
+.sent-banner{background:#e8f5e9;color:var(--green);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:14px;font-weight:600}
+.share-hint{background:#e3f0fd;border:1px solid #bbdefb;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px;color:var(--blue-d)}

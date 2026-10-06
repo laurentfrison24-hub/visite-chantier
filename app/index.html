@@ -24,6 +24,7 @@
     <div class="brand-name">Pyrénées Énergies Solutions</div>
     <div class="brand-sub" id="topbar-sub">Visites de chantier</div>
   </div>
+  <button class="settings-btn" id="btn-settings" type="button" aria-label="Réglages">⚙️</button>
 </header>
 
 <main id="view-home" class="view" hidden>
@@ -37,7 +38,7 @@
     <p>Aucune visite pour l'instant.</p>
     <p class="muted">Touchez « Nouvelle visite » pour commencer.</p>
   </div>
-  <p class="footer-note muted" id="storage-note">Les données sont enregistrées uniquement sur cet iPhone. Pensez à envoyer le dossier après chaque visite.</p>
+  <p class="footer-note muted" id="storage-note">Les données sont enregistrées uniquement sur cet iPhone. Pensez à envoyer chaque dossier à Aide Chantier après la visite.</p>
   <div class="bottombar">
     <button type="button" class="btn primary big" id="btn-new">＋ Nouvelle visite</button>
   </div>
@@ -94,10 +95,27 @@
       <button type="button" class="btn danger-outline" id="btn-delete">🗑️ Supprimer cette visite</button>
     </section>
   </form>
-  <div class="bottombar">
-    <span class="save-state muted small" id="save-state"></span>
-    <button type="button" class="btn primary big" id="btn-export">📤 Envoyer le dossier</button>
+  <div class="bottombar bottombar-stack">
+    <div class="bottombar-row">
+      <span class="save-state muted small" id="save-state"></span>
+      <button type="button" class="btn primary big" id="btn-send-aide">📤 Envoyer à Aide Chantier</button>
+    </div>
+    <button type="button" class="btn ghost" id="btn-share-other">Partager autrement</button>
   </div>
+</main>
+
+<main id="view-settings" class="view" hidden>
+  <section class="card">
+    <h2>Réglages</h2>
+    <p class="muted small">Ces adresses sont enregistrées uniquement sur cet iPhone.</p>
+    <label class="field"><span>Adresse pour recevoir les dossiers (Aide Chantier lit cette boîte)</span>
+      <input id="set-email-reception" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="laurent.frison24@gmail.com"></label>
+    <label class="field"><span>Adresse pour les réponses</span>
+      <input id="set-email-reponse" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="contact@pyrenees-energies-solutions.fr"></label>
+    <p class="muted small">Aide Chantier vous renverra l'analyse à cette adresse.</p>
+    <button type="button" class="btn primary" id="btn-settings-save" style="width:100%;margin-top:8px">Enregistrer</button>
+  </section>
+  <p class="footer-note muted">Version <span id="settings-version"></span></p>
 </main>
 
 <!-- Éditeur d'annotations -->

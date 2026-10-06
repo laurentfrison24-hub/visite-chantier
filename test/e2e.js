@@ -155,14 +155,42 @@ const check = (name, ok, extra = '') => { results.push({ name, ok: !!ok, extra }
   await page.click('#ed-save');
   await page.waitForSelector('#editor', { state: 'hidden' });
 
-  // --- Export ZIP ---
-  await page.click('#btn-export');
+  // --- Boutons d'envoi ---
+  check('Bouton principal « Envoyer à Aide Chantier »', await page.isVisible('#btn-send-aide') && /Aide Chantier/.test(await page.textContent('#btn-send-aide')));
+  check('Bouton secondaire « Partager autrement »', await page.isVisible('#btn-share-other'));
+  await hideToast(page);
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(SHOTS, '02c-boutons-envoi.png') });
+
+  // --- Réglages ---
+  await page.click('#btn-back');
+  await page.waitForSelector('#view-home:not([hidden])');
+  await page.click('#btn-settings');
+  await page.waitForSelector('#view-settings:not([hidden])');
+  const defR = await page.inputValue('#set-email-reception');
+  const defP = await page.inputValue('#set-email-reponse');
+  check('Réglages : réception par défaut', defR === 'laurent.frison24@gmail.com', defR);
+  check('Réglages : réponse par défaut', defP === 'contact@pyrenees-energies-solutions.fr', defP);
+  await page.fill('#set-email-reponse', 'reponses@pyrenees-energies-solutions.fr');
+  await page.click('#btn-settings-save');
+  await page.waitForSelector('#view-home:not([hidden])');
+  // rouvrir la visite Dupont (la 1re créée, unique pour l'instant)
+  await page.click('.item .item-main');
+  await page.waitForSelector('#view-chantier:not([hidden])');
+
+  // --- Export ZIP (repli téléchargement, sans Web Share) ---
+  await page.click('#btn-send-aide');
   await page.waitForSelector('#modal:not([hidden])', { timeout: 30000 });
   await page.screenshot({ path: path.join(SHOTS, '04-dossier-pret.png') });
+  const modalTitle = await page.textContent('#modal-title');
+  check('Modal « Envoyer à Aide Chantier »', /Aide Chantier/.test(modalTitle), modalTitle);
+  check('Hint destinataire Mail dans la modal', /laurent\.frison24@gmail\.com/.test(await page.textContent('#modal-body')));
   const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#modal-actions .btn:has-text("Télécharger")')]);
   const zipPath = path.join(__dirname, 'export-test.zip');
   await dl.saveAs(zipPath);
-  check('ZIP téléchargé (repli sans Web Share)', fs.existsSync(zipPath), dl.suggestedFilename());
+  const sug = dl.suggestedFilename();
+  check('ZIP nommé visite-chantier_<slug>_<date>.zip', /^visite-chantier_pac-air-eau-maison-dupont_\d{4}-\d{2}-\d{2}\.zip$/.test(sug), sug);
   const zip = await JSZip.loadAsync(fs.readFileSync(zipPath));
   const names = Object.keys(zip.files).filter(n => !zip.files[n].dir).sort();
   console.log('  Contenu du ZIP :', names.join(', '));
@@ -170,6 +198,8 @@ const check = (name, ok, extra = '') => { results.push({ name, ok: !!ok, extra }
   check('chantier.json complet', data.chantier.nom === 'PAC air/eau – Maison Dupont' && data.chantier.client === 'M. et Mme Dupont'
     && data.chantier.telephone && data.chantier.email && data.chantier.gps && data.chantier.gps.latitude > 42 && /Perpignan/.test(data.chantier.adresse)
     && /Chaudière/.test(data.chantier.notes) && data.photos.length === 2 && data.photos[0].legende === 'Unité extérieure', JSON.stringify(data.chantier).slice(0, 200));
+  check('email_reponse dans chantier.json', data.email_reponse === 'reponses@pyrenees-energies-solutions.fr', data.email_reponse);
+  check('email_reception dans chantier.json', data.email_reception === 'laurent.frison24@gmail.com', data.email_reception);
   check('originals/ contient 2 JPEG', names.filter(n => n.startsWith('originals/') && n.endsWith('.jpg')).length === 2);
   check('annotees/ contient 2 JPEG', names.filter(n => n.startsWith('annotees/') && n.endsWith('.jpg')).length === 2);
   check('compte-rendu.html présent', names.includes('compte-rendu.html'));
@@ -182,16 +212,36 @@ const check = (name, ok, extra = '') => { results.push({ name, ok: !!ok, extra }
   fs.writeFileSync(path.join(__dirname, 'zip-out', 'chantier.json'), JSON.stringify(data, null, 2));
   await page.click('#modal-actions .btn:has-text("Fermer")').catch(() => {});
 
-  // Web Share : simule un navigateur qui supporte le partage de fichiers (comme Safari iOS)
+  // Web Share : simule Safari iOS (partage fichiers + presse-papiers)
   await page.evaluate(() => {
     window.__shared = null;
+    window.__copied = null;
     navigator.canShare = (d) => !!(d && d.files);
-    navigator.share = async (d) => { window.__shared = { n: d.files.length, name: d.files[0].name, type: d.files[0].type, size: d.files[0].size }; };
+    navigator.share = async (d) => {
+      window.__shared = { n: d.files.length, name: d.files[0].name, type: d.files[0].type, size: d.files[0].size, title: d.title, text: d.text };
+    };
+    const clip = { writeText: async (t) => { window.__copied = t; } };
+    try { Object.defineProperty(navigator, 'clipboard', { configurable: true, get: () => clip }); }
+    catch (e) { navigator.clipboard = clip; }
   });
-  await page.click('#btn-export');
+  await page.click('#btn-send-aide');
   await page.waitForFunction(() => window.__shared, null, { timeout: 30000 });
-  const shared = await page.evaluate(() => window.__shared);
-  check('navigator.share({files}) appelé avec le ZIP', shared.n === 1 && shared.type === 'application/zip' && shared.name.endsWith('.zip'), JSON.stringify(shared));
+  const shared = await page.evaluate(() => ({ ...window.__shared, copied: window.__copied }));
+  check('navigator.share({files,title,text})', shared.n === 1 && shared.type === 'application/zip'
+    && /^visite-chantier_/.test(shared.name)
+    && /Visite Chantier/.test(shared.title)
+    && /Dupont/.test(shared.title)
+    && /Perpignan|photo/i.test(shared.text), JSON.stringify(shared).slice(0, 280));
+  check('Adresse réception copiée dans le presse-papiers', shared.copied === 'laurent.frison24@gmail.com', shared.copied);
+  await page.waitForTimeout(500);
+  const sentBanner = await page.isVisible('#sent-banner:not([hidden])');
+  check('Marqué « Envoyé » après partage réussi', sentBanner, await page.textContent('#sent-banner').catch(() => ''));
+  await page.click('#btn-back');
+  await page.waitForSelector('#view-home:not([hidden])');
+  check('Liste : badge Envoyé le …', /Envoyé le/.test(await page.textContent('.item:first-child')), await page.textContent('.item:first-child .item-sent').catch(() => ''));
+  // rouvrir pour la suite des tests (2e/3e visite)
+  await page.click('.item:first-child .item-main');
+  await page.waitForSelector('#view-chantier:not([hidden])');
 
   // --- Retour à l'accueil, 2e visite, suppression ---
   await page.click('#btn-back');

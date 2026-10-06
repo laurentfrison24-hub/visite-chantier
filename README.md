@@ -13,3 +13,11 @@ Lancer en local : `cd app && python3 -m http.server 8765` puis http://127.0.0.1:
 Tests : `cd test && npm i && node e2e.js` (serveur local lancé).
 
 Mise à jour : modifier les fichiers, puis incrémenter `CACHE` dans `app/sw.js` pour que les iPhones récupèrent la nouvelle version.
+
+## v1.1.0 – Envoi à Aide Chantier
+
+- Bouton principal **Envoyer à Aide Chantier** (feuille de partage iOS → Mail, objet prérempli, adresse de réception copiée).
+- **Partager autrement** pour un partage générique / téléchargement.
+- Réglages (⚙️) : adresse de réception des dossiers (défaut `laurent.frison24@gmail.com`) et adresse pour les réponses d'analyse (défaut `contact@pyrenees-energies-solutions.fr`, stockée dans `chantier.json` comme `email_reponse`).
+- ZIP nommé `visite-chantier_<slug>_<AAAA-MM-JJ>.zip`, recompression si > ~20 Mo.
+- Badge **Envoyé le …** après un partage réussi.
