@@ -1,0 +1,25 @@
+const { webkit, devices } = require('playwright-core');
+const path = require('path');
+(async () => {
+  const b = await webkit.launch();
+  const ctx = await b.newContext({ ...devices['iPhone 13'], locale: 'fr-FR' });
+  const p = await ctx.newPage();
+  const errs = []; p.on('pageerror', e => errs.push(e.message)); p.on('console', m => { if (m.type()==='error') errs.push(m.text()); });
+  await p.goto('http://127.0.0.1:8765/');
+  await p.click('#btn-new'); await p.waitForSelector('#view-chantier:not([hidden])');
+  await p.fill('input[name=nom]', 'Test WebKit');
+  await p.setInputFiles('#in-camera', path.join(__dirname, 'test-photo.jpg'));
+  await p.waitForSelector('#photos .photo', { timeout: 20000 });
+  await p.click('#photos .photo .photo-img'); await p.waitForSelector('#editor:not([hidden])'); await p.waitForTimeout(300);
+  const bx = await p.locator('#ed-draw').boundingBox();
+  await p.mouse.move(bx.x + 40, bx.y + 40); await p.mouse.down(); await p.mouse.move(bx.x + 200, bx.y + 150, { steps: 10 }); await p.mouse.up();
+  await p.click('.tool[data-tool=arrow]');
+  await p.mouse.move(bx.x + 60, bx.y + 180); await p.mouse.down(); await p.mouse.move(bx.x + 250, bx.y + 60, { steps: 10 }); await p.mouse.up();
+  const n = await p.evaluate(() => window.__edShapes().length);
+  await p.click('#ed-save'); await p.waitForSelector('#editor', { state: 'hidden' });
+  await p.click('#btn-export'); await p.waitForSelector('#modal:not([hidden])', { timeout: 30000 });
+  const exp = await p.evaluate(() => window.__lastExport && { name: window.__lastExport.name, size: window.__lastExport.blob.size });
+  const saved = await p.evaluate(async () => (await window.__app.DB.photosOf(location.hash.split('/')[2])).map(x => x.hasAnnot));
+  console.log('WebKit: formes=', n, 'annotée=', saved, 'export=', JSON.stringify(exp), 'erreurs=', JSON.stringify(errs));
+  await b.close();
+})().catch(e => { console.error('WEBKIT KO', e.message.slice(0, 400)); process.exit(1); });
