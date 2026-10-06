@@ -2,11 +2,16 @@
    Application web autonome (PWA), sans serveur. Données dans IndexedDB. */
 'use strict';
 (function () {
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const COMPANY = 'Pyrénées Énergies Solutions';
-const MAX_SIDE = 2000;          // côté long max des photos
+const MAX_SIDE = 2000;          // côté long max des photos (stockage)
 const JPEG_Q = 0.85;
 const THUMB_SIDE = 480;
+const EXPORT_WARN_BYTES = 20 * 1024 * 1024;   // ~20 Mo : recompression
+const EXPORT_HARD_BYTES = 24 * 1024 * 1024;   // avertissement Gmail
+const DEFAULT_EMAIL_RECEPTION = 'laurent.frison24@gmail.com';
+const DEFAULT_EMAIL_REPONSE = 'contact@pyrenees-energies-solutions.fr';
+const SETTINGS_KEY = 'visite-chantier-settings';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -29,6 +34,29 @@ function slug(s, max = 40) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '');
 }
 function fmtSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' Mo' : Math.max(1, Math.round(b / 1024)) + ' Ko'; }
+function fmtDay(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d)) return s;
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+function loadSettings() {
+  try {
+    const o = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {};
+    return {
+      emailReception: (o.emailReception || DEFAULT_EMAIL_RECEPTION).trim() || DEFAULT_EMAIL_RECEPTION,
+      emailReponse: (o.emailReponse || DEFAULT_EMAIL_REPONSE).trim() || DEFAULT_EMAIL_REPONSE,
+    };
+  } catch (e) {
+    return { emailReception: DEFAULT_EMAIL_RECEPTION, emailReponse: DEFAULT_EMAIL_REPONSE };
+  }
+}
+function saveSettings(o) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+    emailReception: (o.emailReception || DEFAULT_EMAIL_RECEPTION).trim() || DEFAULT_EMAIL_RECEPTION,
+    emailReponse: (o.emailReponse || DEFAULT_EMAIL_REPONSE).trim() || DEFAULT_EMAIL_REPONSE,
+  }));
+}
 
 /* ------------------------------------------------------------------ */
 /* IndexedDB                                                           */
@@ -304,6 +332,7 @@ function objURL(blobOrBuf) {
 function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
 async function route() {
   const h = location.hash || '#/';
+  if (h === '#/settings') { await flushSave(); Editor.close(true); showSettings(); return; }
   const m = h.match(/^#\/c\/([^/]+)(?:\/p\/([^/]+))?$/);
   await flushSave();
   if (m) {
@@ -331,9 +360,10 @@ function err(e) { console.error(e); busy(false); toast('Erreur : ' + (e && e.mes
 /* ------------------------------------------------------------------ */
 async function showHome() {
   revokeAll();
-  document.body.classList.remove('in-chantier');
-  $('#view-chantier').hidden = true; $('#view-home').hidden = false;
-  $('#btn-back').hidden = true; $('#topbar-sub').textContent = 'Visites de chantier';
+  document.body.classList.remove('in-chantier', 'in-settings');
+  $('#view-chantier').hidden = true; $('#view-settings').hidden = true; $('#view-home').hidden = false;
+  $('#btn-back').hidden = true; $('#btn-settings').hidden = false;
+  $('#topbar-sub').textContent = 'Visites de chantier';
   document.title = 'Visite Chantier – ' + COMPANY;
   const list = await DB.allChantiers();
   const key = (c) => (c.date || '') + '|' + (c.createdAt || '');
@@ -354,6 +384,7 @@ async function showHome() {
           <div class="item-line">${esc(c.client || 'Client non renseigné')}</div>
           <div class="item-line">${esc(fmtDate(c.date))} · ${photos.length} photo${photos.length > 1 ? 's' : ''}</div>
           ${c.adresse ? `<div class="item-line">📍 ${esc(c.adresse)}</div>` : ''}
+          ${c.envoyeAt ? `<div class="item-line item-sent">✓ Envoyé le ${esc(fmtDate(c.envoyeAt))}</div>` : ''}
         </div>
       </button>
       <button type="button" class="item-del" data-action="delete" data-id="${esc(c.id)}" aria-label="Supprimer la visite">🗑️</button>`;
@@ -404,11 +435,19 @@ const FIELDS = ['nom', 'client', 'tel', 'email', 'date', 'adresse', 'notes'];
 async function showChantier() {
   revokeAll();
   document.body.classList.add('in-chantier');
-  $('#view-home').hidden = true; $('#view-chantier').hidden = false;
-  $('#btn-back').hidden = false;
+  document.body.classList.remove('in-settings');
+  $('#view-home').hidden = true; $('#view-settings').hidden = true; $('#view-chantier').hidden = false;
+  $('#btn-back').hidden = false; $('#btn-settings').hidden = true;
   const f = $('#form');
   FIELDS.forEach(k => { f.elements[k].value = current[k] || ''; });
   updateTitle(); renderGps(); $('#loc-status').textContent = ''; $('#save-state').textContent = '';
+  let banner = $('#sent-banner');
+  if (!banner) {
+    banner = document.createElement('div'); banner.id = 'sent-banner'; banner.className = 'sent-banner';
+    f.insertBefore(banner, f.firstChild);
+  }
+  if (current.envoyeAt) { banner.hidden = false; banner.textContent = '✓ Envoyé à Aide Chantier le ' + fmtDate(current.envoyeAt); }
+  else banner.hidden = true;
   window.scrollTo(0, 0);
   await renderPhotos();
 }
@@ -888,48 +927,113 @@ ${row('Photos', String(items.length))}
 <footer>Généré le ${esc(fmtDate(new Date()))} avec l'application Visite Chantier – ${esc(COMPANY)}</footer>
 </body></html>`;
 }
-async function buildZip(chantierId) {
+async function reencodeBlob(blob, maxSide, quality) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await loadImage(url);
+    const { w, h } = fitSize(img.naturalWidth, img.naturalHeight, maxSide);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const out = await canvasToBlob(c, 'image/jpeg', quality);
+    freeCanvas(c);
+    return { blob: out, w, h };
+  } finally { URL.revokeObjectURL(url); }
+}
+function zipFileName(c) {
+  const d = (c.date || '').slice(0, 10) || localISO().slice(0, 10);
+  const slugNom = slug(c.nom || c.client || 'chantier', 40) || 'chantier';
+  return `visite-chantier_${slugNom}_${d}.zip`;
+}
+function shareTitle(c) {
+  const day = fmtDay(c.date || new Date());
+  const parts = ['Visite Chantier', c.nom || 'Sans nom', c.client || '', day].filter(Boolean);
+  return parts.join(' – ');
+}
+function shareText(c, nPhotos) {
+  const title = shareTitle(c);
+  const notes = (c.notes || '').trim().split(/\n/).filter(Boolean).slice(0, 3).join(' · ');
+  const lines = [title];
+  if (c.adresse) lines.push('Adresse : ' + c.adresse);
+  lines.push(nPhotos + ' photo' + (nPhotos > 1 ? 's' : ''));
+  if (notes) lines.push('Notes : ' + notes);
+  lines.push('Dossier pour Aide Chantier – ' + COMPANY);
+  return lines.join('\n');
+}
+async function buildZip(chantierId, opts) {
+  opts = opts || {};
+  const maxSide = opts.maxSide || MAX_SIDE;
+  const quality = opts.quality != null ? opts.quality : JPEG_Q;
   if (!window.JSZip) throw new Error('Module ZIP indisponible');
   await flushSave();
   const c = await DB.getChantier(chantierId);
   const photos = await DB.photosOf(chantierId);
+  const settings = loadSettings();
   const zip = new JSZip();
   const items = [];
   for (let i = 0; i < photos.length; i++) {
     const p = photos[i];
     busy(true, `Préparation du dossier… (${i + 1}/${photos.length})`);
     const base = `photo-${pad(i + 1)}${p.caption ? '-' + slug(p.caption) : ''}.jpg`;
-    const orig = await DB.getFile(p.id + ':orig');
+    let orig = await DB.getFile(p.id + ':orig');
     if (!orig) continue;
+    let ow = p.width, oh = p.height;
+    if (maxSide < MAX_SIDE || quality < JPEG_Q) {
+      const r = await reencodeBlob(orig, maxSide, quality);
+      orig = r.blob; ow = r.w; oh = r.h;
+    }
     zip.file('originals/' + base, await blobToBuf(orig), { binary: true });
     let annotee = null;
     if (p.hasAnnot) {
-      const a = await DB.getFile(p.id + ':annot');
-      if (a) { zip.file('annotees/' + base, await blobToBuf(a), { binary: true }); annotee = 'annotees/' + base; }
+      let a = await DB.getFile(p.id + ':annot');
+      if (a) {
+        if (maxSide < MAX_SIDE || quality < JPEG_Q) a = (await reencodeBlob(a, maxSide, quality)).blob;
+        zip.file('annotees/' + base, await blobToBuf(a), { binary: true });
+        annotee = 'annotees/' + base;
+      }
     }
     items.push({
       numero: i + 1, legende: p.caption || '', original: 'originals/' + base, annotee,
-      largeur: p.width, hauteur: p.height, ajoutee_le: p.createdAt, annotations: p.annotations || [],
+      largeur: ow, hauteur: oh, ajoutee_le: p.createdAt, annotations: p.annotations || [],
     });
   }
   zip.folder('originals'); zip.folder('annotees');
   const data = {
     application: 'Visite Chantier – ' + COMPANY, version: APP_VERSION, exporte_le: new Date().toISOString(),
+    email_reponse: settings.emailReponse,
+    email_reception: settings.emailReception,
     chantier: {
       id: c.id, nom: c.nom || '', client: c.client || '', telephone: c.tel || '', email: c.email || '',
       date: c.date || '', adresse: c.adresse || '',
       gps: c.lat != null ? { latitude: c.lat, longitude: c.lon, precision_m: c.precision, releve_le: c.gpsAt || null } : null,
       notes: c.notes || '', cree_le: c.createdAt, modifie_le: c.updatedAt,
+      envoye_le: c.envoyeAt || null,
     },
     photos: items.map(it => ({ ...it, annotations_format: 'coordonnées en pixels de l\'image originale' })),
   };
   zip.file('chantier.json', JSON.stringify(data, null, 2), { compression: 'DEFLATE' });
   zip.file('compte-rendu.html', reportHTML(c, items), { compression: 'DEFLATE' });
   busy(true, 'Compression du dossier…');
-  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip', compression: 'STORE' });
-  const d = (c.date || '').slice(0, 10) || localISO().slice(0, 10);
-  const name = `visite-${d}-${slug(c.nom || c.client || 'chantier', 30) || 'chantier'}.zip`;
-  return { blob, name, chantier: c };
+  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  return { blob, name: zipFileName(c), chantier: c, photoCount: items.length, compressed: maxSide < MAX_SIDE || quality < JPEG_Q };
+}
+async function buildZipForMail(chantierId) {
+  let res = await buildZip(chantierId);
+  let warned = false;
+  if (res.blob.size > EXPORT_WARN_BYTES) {
+    busy(true, 'Dossier volumineux : recompression…');
+    res = await buildZip(chantierId, { maxSide: 1600, quality: 0.72 });
+    warned = true;
+  }
+  if (res.blob.size > EXPORT_WARN_BYTES) {
+    busy(true, 'Recompression renforcée…');
+    res = await buildZip(chantierId, { maxSide: 1280, quality: 0.6 });
+    warned = true;
+  }
+  res.oversized = res.blob.size > EXPORT_HARD_BYTES;
+  res.warned = warned;
+  return res;
 }
 function canShareFile(file) {
   try { return !!(navigator.share && navigator.canShare && navigator.canShare({ files: [file] })); } catch (e) { return false; }
@@ -940,41 +1044,159 @@ function download(blob, name) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(u), 60000);
 }
-async function shareFile(file, c) {
-  await navigator.share({ files: [file], title: `Visite chantier – ${c.nom || c.client || ''}`.trim() });
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); return true; }
+  } catch (e) { /* ignore */ }
+  try {
+    const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch (e) { return false; }
+}
+async function markSent(chantierId) {
+  const c = await DB.getChantier(chantierId);
+  if (!c) return;
+  c.envoyeAt = new Date().toISOString();
+  c.updatedAt = c.envoyeAt;
+  await DB.putChantier(c);
+  if (current && current.id === chantierId) {
+    current.envoyeAt = c.envoyeAt;
+    const banner = $('#sent-banner');
+    if (banner) { banner.hidden = false; banner.textContent = '✓ Envoyé à Aide Chantier le ' + fmtDate(c.envoyeAt); }
+  }
+}
+async function shareDossier(file, c, nPhotos, { aide }) {
+  const title = shareTitle(c);
+  const text = shareText(c, nPhotos);
+  const payload = { files: [file], title, text };
+  if (aide) {
+    const to = loadSettings().emailReception;
+    await copyText(to); // même geste utilisateur
+    toast(`Choisissez Mail, destinataire : ${to} (adresse copiée, collez-la)`, 5000);
+  }
+  await navigator.share(payload);
 }
 window.__lastExport = null; // utilisé par les tests automatiques
-$('#btn-export').addEventListener('click', async () => {
-  if (!current) return;
-  const btn = $('#btn-export'); btn.disabled = true;
+async function prepareExport() {
+  if (!current) return null;
   let res;
-  try { res = await buildZip(current.id); } catch (e) { btn.disabled = false; err(e); return; }
-  busy(false); btn.disabled = false;
+  try { res = await buildZipForMail(current.id); } catch (e) { busy(false); err(e); return null; }
+  busy(false);
   window.__lastExport = res;
+  return res;
+}
+function setExportBusy(on) {
+  const a = $('#btn-send-aide'), b = $('#btn-share-other');
+  if (a) a.disabled = on; if (b) b.disabled = on;
+}
+async function doSendAide() {
+  if (!current) return;
+  setExportBusy(true);
+  const res = await prepareExport();
+  setExportBusy(false);
+  if (!res) return;
   const file = new File([res.blob], res.name, { type: 'application/zip' });
   const shareable = canShareFile(file);
-  if (shareable) {
-    try { await shareFile(file, res.chantier); toast('Dossier envoyé'); return; }
-    catch (e) {
-      if (e && e.name === 'AbortError') return;    // l'utilisateur a fermé la feuille de partage
-      // NotAllowedError : le geste a expiré pendant la préparation → on propose un 2e bouton
+  const to = loadSettings().emailReception;
+  const sizeNote = res.oversized
+    ? `<p style="color:var(--red)">⚠ Le dossier fait ${fmtSize(res.blob.size)} (limite Gmail ~25 Mo). Retirez des photos ou réduisez-les avant d'envoyer.</p>`
+    : (res.warned ? `<p class="muted small">Photos recompressées pour rester sous 20 Mo (${fmtSize(res.blob.size)}).</p>` : '');
+  if (shareable && !res.oversized) {
+    try {
+      await shareDossier(file, res.chantier, res.photoCount, { aide: true });
+      await markSent(current.id);
+      toast('Dossier envoyé à Aide Chantier');
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      // geste expiré → fenêtre de secours
     }
   }
   const choice = await modal({
-    title: 'Dossier prêt',
+    title: 'Envoyer à Aide Chantier',
     html: `<p><b>${esc(res.name)}</b><br><span class="muted">${fmtSize(res.blob.size)}</span></p>
-           <p class="muted small">${shareable ? 'Touchez « Partager » pour l\'envoyer par Mail, Messages, AirDrop ou l\'enregistrer dans Fichiers.' : 'Le partage direct n\'est pas disponible sur ce navigateur : touchez « Télécharger ».'}</p>`,
+           ${sizeNote}
+           <div class="share-hint">Choisissez <b>Mail</b>, destinataire : <b>${esc(to)}</b> (adresse copiée, collez-la). Objet prérempli : « ${esc(shareTitle(res.chantier))} ».</div>
+           <p class="muted small">${shareable ? 'Touchez « Partager » pour ouvrir la feuille de partage iOS.' : 'Le partage direct n\'est pas disponible : téléchargez le ZIP puis joignez-le à un e-mail.'}</p>`,
     buttons: [
       { label: 'Fermer', value: null },
-      { label: 'Télécharger', value: 'dl', cls: shareable ? 'ghost' : 'primary' },
+      { label: 'Télécharger', value: 'dl', cls: 'ghost' },
       ...(shareable ? [{ label: 'Partager…', value: 'share', cls: 'primary', onClick: () => {
-        shareFile(file, res.chantier).then(() => toast('Dossier envoyé')).catch(e => {
-          if (!e || e.name !== 'AbortError') { toast('Partage impossible : téléchargement du fichier'); download(res.blob, res.name); }
+        shareDossier(file, res.chantier, res.photoCount, { aide: true }).then(async () => {
+          await markSent(current.id); toast('Dossier envoyé à Aide Chantier');
+        }).catch(e => {
+          if (!e || e.name !== 'AbortError') { toast('Partage impossible : téléchargement'); download(res.blob, res.name); }
         });
       } }] : []),
     ],
   });
   if (choice === 'dl') download(res.blob, res.name);
+}
+async function doShareOther() {
+  if (!current) return;
+  setExportBusy(true);
+  const res = await prepareExport();
+  setExportBusy(false);
+  if (!res) return;
+  const file = new File([res.blob], res.name, { type: 'application/zip' });
+  const shareable = canShareFile(file);
+  if (shareable) {
+    try {
+      await shareDossier(file, res.chantier, res.photoCount, { aide: false });
+      toast('Dossier partagé');
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+    }
+  }
+  const choice = await modal({
+    title: 'Partager autrement',
+    html: `<p><b>${esc(res.name)}</b><br><span class="muted">${fmtSize(res.blob.size)}</span></p>
+           <p class="muted small">${shareable ? 'Touchez « Partager » pour Mail, Messages, AirDrop ou Fichiers.' : 'Téléchargez le fichier ZIP.'}</p>`,
+    buttons: [
+      { label: 'Fermer', value: null },
+      { label: 'Télécharger', value: 'dl', cls: shareable ? 'ghost' : 'primary' },
+      ...(shareable ? [{ label: 'Partager…', value: 'share', cls: 'primary', onClick: () => {
+        shareDossier(file, res.chantier, res.photoCount, { aide: false }).then(() => toast('Dossier partagé')).catch(e => {
+          if (!e || e.name !== 'AbortError') { toast('Partage impossible : téléchargement'); download(res.blob, res.name); }
+        });
+      } }] : []),
+    ],
+  });
+  if (choice === 'dl') download(res.blob, res.name);
+}
+$('#btn-send-aide').addEventListener('click', () => doSendAide().catch(err));
+$('#btn-share-other').addEventListener('click', () => doShareOther().catch(err));
+
+/* ------------------------------------------------------------------ */
+/* Réglages                                                            */
+/* ------------------------------------------------------------------ */
+function showSettings() {
+  revokeAll();
+  Editor.close(true);
+  document.body.classList.add('in-settings');
+  document.body.classList.remove('in-chantier');
+  $('#view-home').hidden = true; $('#view-chantier').hidden = true; $('#view-settings').hidden = false;
+  $('#btn-back').hidden = false; $('#btn-settings').hidden = true;
+  $('#topbar-sub').textContent = 'Réglages';
+  document.title = 'Réglages – Visite Chantier';
+  const s = loadSettings();
+  $('#set-email-reception').value = s.emailReception;
+  $('#set-email-reponse').value = s.emailReponse;
+  $('#settings-version').textContent = APP_VERSION;
+  window.scrollTo(0, 0);
+}
+$('#btn-settings').addEventListener('click', () => { location.hash = '#/settings'; });
+$('#btn-settings-save').addEventListener('click', () => {
+  const emailReception = $('#set-email-reception').value.trim();
+  const emailReponse = $('#set-email-reponse').value.trim();
+  if (emailReception && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailReception)) { toast('Adresse de réception invalide'); return; }
+  if (emailReponse && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailReponse)) { toast('Adresse de réponse invalide'); return; }
+  saveSettings({ emailReception, emailReponse });
+  toast('Réglages enregistrés');
+  go('#/');
 });
 
 /* ------------------------------------------------------------------ */
@@ -984,6 +1206,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e)); });
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-window.__app = { DB, version: APP_VERSION };
+window.__app = { DB, version: APP_VERSION, loadSettings, saveSettings, shareTitle, zipFileName, buildZipForMail };
 route().catch(err);
 })();
