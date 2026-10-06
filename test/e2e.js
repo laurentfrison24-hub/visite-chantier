@@ -26,7 +26,9 @@ const check = (name, ok, extra = '') => { results.push({ name, ok: !!ok, extra }
   await page.goto(BASE);
   await page.waitForSelector('#view-home:not([hidden])');
   check('Accueil affiché, liste vide', await page.isVisible('#empty'));
-  check('Nom de la société dans l\'en-tête', (await page.textContent('.brand-name')).includes('Pyrénées Énergies Solutions'));
+  check('Logo + titre Visite Chantier dans l\'en-tête',
+    await page.isVisible('.brand-logo') && (await page.textContent('.brand-name')).includes('Visite Chantier'));
+  check('Société en sous-titre', (await page.textContent('#topbar-sub')).includes('Pyrénées Énergies Solutions'));
 
   // --- Création d'une visite ---
   await page.click('#btn-new');

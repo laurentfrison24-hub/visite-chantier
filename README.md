@@ -14,6 +14,12 @@ Tests : `cd test && npm i && node e2e.js` (serveur local lancé).
 
 Mise à jour : modifier les fichiers, puis incrémenter `CACHE` dans `app/sw.js` pour que les iPhones récupèrent la nouvelle version.
 
+## v1.2.1 – Logo PES dans l'en-tête
+
+- Logo Pyrénées Énergies Solutions dans le header (`icons/logo-header.png`, fond blanc arrondi sur le bandeau bleu).
+- Titre court « Visite Chantier » + sous-titre dynamique.
+- CACHE `visite-chantier-v1.2.1`.
+
 ## v1.2.0 – Envoi auto via dépôt GitHub (sans feuille de partage)
 
 - Bouton principal **Envoyer à Aide Chantier** : si un jeton GitHub est configuré, construit le ZIP et le pousse dans le dépôt privé `laurentfrison24-hub/visite-chantier-inbox` (`dossiers/<date>/<slug>_<HHmmss>/chantier.json` + `dossier.zip`) via l’API Git (blobs/trees/commits), puis ping webhook optionnel.

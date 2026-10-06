@@ -1,10 +1,11 @@
 /* Service worker – Visite Chantier : met en cache l'application pour un usage hors ligne. */
-const CACHE = 'visite-chantier-v1.2.0';
+const CACHE = 'visite-chantier-v1.2.1';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.json',
   './vendor/jszip.min.js', './apple-touch-icon.png',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
   './icons/icon-maskable-512.png', './icons/favicon-32.png',
+  './icons/logo-header.png', './icons/logo-192.png',
 ];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
