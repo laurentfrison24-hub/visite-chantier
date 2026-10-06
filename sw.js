@@ -1,5 +1,5 @@
 /* Service worker – Visite Chantier : met en cache l'application pour un usage hors ligne. */
-const CACHE = 'visite-chantier-v1.2.1';
+const CACHE = 'visite-chantier-v1.2.2';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.json',
   './vendor/jszip.min.js', './apple-touch-icon.png',
